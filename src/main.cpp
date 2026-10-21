@@ -52,6 +52,7 @@ struct FullscreenQuad {
             const int   kViewSteps = 64;
             const float kPi = 3.14159265358979323846;
             const float kExposure = 1.0;
+            const float kSunAngularRadius = 0.00935 / 2.0;
 
             float rayleighPhase(float mu) {
                 return 3.0 / (16.0 * kPi) * (1.0 + mu * mu);
@@ -123,6 +124,13 @@ struct FullscreenQuad {
                 }
 
                 vec3 radiance = sunIrradiance.rgb * inscattered;
+                if (dir.y > 0.0 && mu >= cos(kSunAngularRadius)) {
+                    float tTop = (kAtmosphereTop - origin.y) / dir.y;
+                    vec3 T = transmittance(origin, origin + dir * tTop, dir);
+                    vec3 Lsun = sunIrradiance.rgb / (kPi * kSunAngularRadius * kSunAngularRadius);
+                    radiance += Lsun * T;
+                }
+
                 vec3 ldr = vec3(1.0) - exp(-radiance * kExposure);
                 color = vec4(pow(ldr, vec3(1.0 / 2.2)), 1.0);
             }
@@ -251,10 +259,22 @@ struct GPUFrame {
 static_assert(sizeof(GPUFrame) == 112);
 
 GLuint frameUbo = 0;
-glm::vec3 sunDirection = glm::normalize(glm::vec3{ 0.f, 1.f, 1.f });
-glm::vec3 sunIrradiance{ 20.f, 20.f, 20.f };
+float sunElevation = glm::radians(45.f);
+float sunAzimuth = 0.f;
+float sunIntensity = 20.f;
+
+static glm::vec3 sunDirFromAngles(float elevation, float azimuth) {
+    const float ce = std::cos(elevation);
+    return glm::vec3{
+        ce * std::sin(azimuth),
+        std::sin(elevation),
+        ce * std::cos(azimuth),
+    };
+}
 
 static void uploadFrame() {
+    const glm::vec3 sunDirection = sunDirFromAngles(sunElevation, sunAzimuth);
+    const glm::vec3 sunIrradiance{ sunIntensity, sunIntensity, sunIntensity };
     const GPUFrame frame{
         camera.inverseViewProjection,
         glm::vec4{camera.position, 1.f},
@@ -307,7 +327,6 @@ int main() {
             lastHeight = height;
 
             camera.setProjection(fovY, static_cast<float>(width) / static_cast<float>(height), nearZ, farZ);
-            uploadFrame();
         }
 
         glClearColor(.0f, .0f, .0f, 1.f);
@@ -316,6 +335,34 @@ int main() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+
+#pragma region operate panel
+        float elevDeg = glm::degrees(sunElevation);
+        float azimDeg = glm::degrees(sunAzimuth);
+        const ImVec2 display = ImGui::GetIO().DisplaySize;
+
+        ImGui::SetNextWindowPos(ImVec2(display.x - 8.f, 8.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
+        ImGui::SetNextWindowSize(ImVec2(260.f, 0.f), ImGuiCond_Always);
+        ImGui::Begin("Atmosphere", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
+
+        constexpr float labelW = 110.f;
+        auto slider = [&](const char* label, const char* id, float* v, float vmin, float vmax) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(label);
+            ImGui::SameLine(labelW);
+            ImGui::SetNextItemWidth(-1.f);
+            ImGui::SliderFloat(id, v, vmin, vmax);
+            };
+
+        slider("Elevation", "##sun_elev", &elevDeg, -90.f, 90.f);
+        slider("Azimuth", "##sun_azim", &azimDeg, -180.f, 180.f);
+        slider("Irradiance", "##sun_irr", &sunIntensity, 0.f, 40.f);
+
+        ImGui::End();
+
+        sunElevation = glm::radians(elevDeg);
+        sunAzimuth = glm::radians(azimDeg);
+#pragma endregion
 
 #pragma region memory usage
         auto usage = sample_usage();
@@ -327,6 +374,7 @@ int main() {
         draw_list->AddText(ImVec2(8.f, 8.f), IM_COL32(255, 255, 255, 255), text);
 #pragma endregion
 
+        uploadFrame();
         quad.draw();
 
         ImGui::Render();
