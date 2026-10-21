@@ -38,6 +38,8 @@ file(GLOB_RECURSE HEADERS "src/*.h")
 
 add_executable(WeatherSystem ${SOURCES} ${HEADERS})
 
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT WeatherSystem)
+
 source_group(TREE ${CMAKE_SOURCE_DIR} FILES ${SOURCES} ${HEADERS})
 
-target_link_libraries(WeatherSystem PRIVATE glfw glm::glm imgui glad)
+target_link_libraries(WeatherSystem PRIVATE glfw glm::glm imgui glad legacy_stdio_definitions pdh)
