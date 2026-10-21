@@ -9,7 +9,7 @@
 
 #include <cstdio>
 #include <vector>
-
+#include <array>
 
 struct Usage {
     float cpu = .0f;
@@ -77,3 +77,74 @@ static Usage sample_usage() {
     }
     return usage;
 }
+
+#include "shader.h"
+
+struct FullscreenQuad {
+    GLuint vao = 0;
+    GLuint vbo = 0;
+
+    void create() {
+        constexpr std::array<float, 18> vertices = {
+            -1.f, -1.f, 0.f,
+             1.f, -1.f, 0.f,
+             1.f,  1.f, 0.f,
+            -1.f, -1.f, 0.f,
+             1.f,  1.f, 0.f,
+            -1.f,  1.f, 0.f,
+        };
+
+        glCreateBuffers(1, &vbo);
+        glNamedBufferStorage(vbo, static_cast<GLsizeiptr>(sizeof(vertices)), vertices.data(), 0);
+
+        glCreateVertexArrays(1, &vao);
+        glVertexArrayVertexBuffer(vao, 0, vbo, 0, 3 * sizeof(float));
+        glEnableVertexArrayAttrib(vao, 0);
+        glVertexArrayAttribFormat(vao, 0, 3, GL_FLOAT, GL_FALSE, 0);
+        glVertexArrayAttribBinding(vao, 0, 0);
+    }
+};
+
+struct ColorTarget {
+    GLuint fbo = 0;
+    GLuint tex = 0;
+
+    int w = 0;
+    int h = 0;
+
+    void destroy() {
+        if (tex != 0) {
+            glDeleteTextures(1, &tex);
+            tex = 0;
+        }
+        if (fbo != 0) {
+            glDeleteFramebuffers(1, &fbo);
+            fbo = 0;
+        }
+    }
+
+    void create(int w, int h) {
+        if (!(w > 0 && h > 0)) {
+            throw std::runtime_error("ColorTarget::create: width and height must be > 0");
+        }
+
+        destroy();
+
+        glCreateTextures(GL_TEXTURE_2D, 1, &tex);
+
+        glTextureStorage2D(tex, 1, GL_RGBA16F, w, h);
+        glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTextureParameteri(tex, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTextureParameteri(tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glCreateFramebuffers(1, &fbo);
+        glNamedFramebufferTexture(fbo, GL_COLOR_ATTACHMENT0, tex, 0);
+        if (glCheckNamedFramebufferStatus(fbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            throw std::runtime_error("ColorTarget::create: framebuffer incomplete");
+        }
+
+        this->w = w;
+        this->h = h;
+    }
+};
