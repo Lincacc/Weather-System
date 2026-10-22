@@ -16,7 +16,7 @@ struct Usage {
     float gpu = .0f;
 };
 
-static Usage sample_usage() {
+static Usage host_usage() {
     static Usage usage;
     static LARGE_INTEGER freq{};
     static LARGE_INTEGER last_qpc{};
@@ -79,7 +79,6 @@ static Usage sample_usage() {
 }
 
 #include "shader.h"
-
 struct FullscreenQuad {
     GLuint vao = 0;
     GLuint vbo = 0;
@@ -105,46 +104,50 @@ struct FullscreenQuad {
     }
 };
 
-struct ColorTarget {
-    GLuint fbo = 0;
-    GLuint tex = 0;
+#include <iostream>
+static GLuint compileShader(GLenum type, std::string_view src) {
+    const GLuint shader = glCreateShader(type);
+    const GLchar* data = src.data();
+    const GLint length = static_cast<GLint>(src.size());
 
-    int w = 0;
-    int h = 0;
+    glShaderSource(shader, 1, &data, &length);
+    glCompileShader(shader);
 
-    void destroy() {
-        if (tex != 0) {
-            glDeleteTextures(1, &tex);
-            tex = 0;
-        }
-        if (fbo != 0) {
-            glDeleteFramebuffers(1, &fbo);
-            fbo = 0;
-        }
+    GLint ok = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (ok != GL_TRUE) {
+        GLint length = 0;
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &length);
+
+        std::string log(static_cast<std::size_t>(length), '\0');
+        glGetShaderInfoLog(shader, length, nullptr, log.data());
+        log.resize(static_cast<std::size_t>(length) - 1);
+        std::cerr << log << '\n';
+
+        throw std::runtime_error("shader compile failed");
+    }
+    return shader;
+}
+
+static GLuint compileProgram(std::string_view vSource, std::string_view fSource) {
+    const GLuint vs = compileShader(GL_VERTEX_SHADER, vSource);
+    const GLuint fs = compileShader(GL_FRAGMENT_SHADER, fSource);
+    const GLuint program = glCreateProgram();
+
+    glAttachShader(program, vs);
+    glAttachShader(program, fs);
+    glLinkProgram(program);
+
+    GLint ok = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &ok);
+    if (ok != GL_TRUE) {
+        throw std::runtime_error("program link failed");
     }
 
-    void create(int w, int h) {
-        if (!(w > 0 && h > 0)) {
-            throw std::runtime_error("ColorTarget::create: width and height must be > 0");
-        }
+    glDetachShader(program, vs);
+    glDetachShader(program, fs);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
 
-        destroy();
-
-        glCreateTextures(GL_TEXTURE_2D, 1, &tex);
-
-        glTextureStorage2D(tex, 1, GL_RGBA32F, w, h);
-        glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTextureParameteri(tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTextureParameteri(tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTextureParameteri(tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        glCreateFramebuffers(1, &fbo);
-        glNamedFramebufferTexture(fbo, GL_COLOR_ATTACHMENT0, tex, 0);
-        if (glCheckNamedFramebufferStatus(fbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            throw std::runtime_error("ColorTarget::create: framebuffer incomplete");
-        }
-
-        this->w = w;
-        this->h = h;
-    }
-};
+    return program;
+}

@@ -1,14 +1,28 @@
 ﻿#include "core/core.h"
+
 #include <cstdint>
 #include <stdexcept>
 #include <utility>
 
 FullscreenQuad quad;
 GLuint weatherSysProgram = 0;
-GLuint tonemapProgram = 0;
 
 #include "core/camera.h"
+float eyeHeight = 1.8f;
+float pitch = glm::radians(15.f);
+float fovY = glm::radians(60.f);
+float nearZ = 0.1f;
+float farZ = 50000.f;
+std::uint32_t t = 0;
 Camera camera;
+
+struct GPUFrame {
+    glm::mat4 inverseViewProjection;
+    glm::vec4 camPosition;
+    glm::vec4 sunDirection;
+    glm::uvec4 status;
+};
+static_assert(sizeof(GPUFrame) == 64 + 16 + 16 + 16);
 
 #include <GLFW/glfw3.h>
 int width = 1280;
@@ -16,56 +30,32 @@ int height = 720;
 int lastWidth = width;
 int lastHeight = height;
 
-float eyeHeight = 1.8f;
-float pitch = glm::radians(15.f);
-float fovY = glm::radians(60.f);
-float nearZ = 0.1f;
-float farZ = 50000.f;
-
-struct GPUFrame {
-    glm::mat4 inverseViewProjection;
-    glm::vec4 cameraPosition;
-    glm::vec4 sunDirection;
-    glm::vec4 sunIrradiance;
-    glm::uvec4 sampleState;
-};
-static_assert(sizeof(GPUFrame) == 128);
-
 GLuint frameUbo = 0;
-float sunElevation = glm::radians(45.f);
-float sunAzimuth = 0.f;
-float sunIntensity = 20.f;
-
-std::uint32_t sampleIndex = 0;
-int accumRead = 0;
-int accumWrite = 1;
-std::array<ColorTarget, 2> accum{};
-
-static glm::vec3 sunDirFromAngles(float elevation, float azimuth) {
-    const float ce = std::cos(elevation);
-    return glm::vec3{
-        ce * std::sin(azimuth),
-        std::sin(elevation),
-        ce * std::cos(azimuth),
-    };
-}
 
 static void uploadFrame() {
-    const glm::vec3 sunDirection = sunDirFromAngles(sunElevation, sunAzimuth);
-    const glm::vec3 sunIrradiance{ sunIntensity, sunIntensity, sunIntensity };
+    auto sunDirFromAngles = [](float elevation, float azimuth) {
+        const float ce = std::cos(elevation);
+        return glm::vec3{
+            ce * std::sin(azimuth),
+            std::sin(elevation),
+            ce * std::cos(azimuth),
+        };
+    };
+    const glm::vec3 sunDirection = sunDirFromAngles(glm::radians(45.f), .0f);
+
     const GPUFrame frame{
         camera.inverseViewProjection,
-        glm::vec4{camera.position, 1.f},
+        glm::vec4{ camera.position, 1.f },
         glm::vec4{sunDirection, 0.f},
-        glm::vec4{sunIrradiance, 0.f},
         glm::uvec4{
-            sampleIndex,
+            t,
             static_cast<std::uint32_t>(width),
             static_cast<std::uint32_t>(height),
-            0u,
-        },
+            0
+        }
     };
-    glNamedBufferSubData(frameUbo, 0, sizeof(frame), &frame);
+
+    glNamedBufferSubData(frameUbo, 0, sizeof(GPUFrame), &frame);
 }
 
 static void drawFullscreen(GLuint program) {
@@ -95,28 +85,21 @@ int main() {
     ImGui_ImplOpenGL3_Init("#version 460");
 
     quad.create();
-
     weatherSysProgram = compileProgram(vSource, fSource);
-    tonemapProgram = compileProgram(vSource, tonemapSource);
-
-    glCreateBuffers(1, &frameUbo);
-    glNamedBufferStorage(frameUbo, sizeof(GPUFrame), nullptr, GL_DYNAMIC_STORAGE_BIT);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameUbo);
-
-    camera.setView(eyeHeight, pitch);
 
     glfwGetFramebufferSize(window, &width, &height);
     if (width <= 0 || height <= 0) {
         throw std::runtime_error("framebuffer size must be > 0");
     }
-
     lastWidth = width;
     lastHeight = height;
 
+    camera.setView(eyeHeight, pitch);
     camera.setProjection(fovY, static_cast<float>(width) / static_cast<float>(height), nearZ, farZ);
-    accum[0].create(width, height);
-    accum[1].create(width, height);
-    uploadFrame();
+
+    glCreateBuffers(1, &frameUbo);
+    glNamedBufferStorage(frameUbo, sizeof(GPUFrame), nullptr, GL_DYNAMIC_STORAGE_BIT);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameUbo);
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -125,6 +108,9 @@ int main() {
         if (width <= 0 || height <= 0) {
             lastWidth = width;
             lastHeight = height;
+
+            t = 0;
+
             continue;
         }
 
@@ -132,56 +118,17 @@ int main() {
             lastWidth = width;
             lastHeight = height;
 
-            camera.setProjection(fovY, static_cast<float>(width) / static_cast<float>(height), nearZ, farZ);
-            accum[0].create(width, height);
-            accum[1].create(width, height);
+            t = 0;
 
-            accumRead = 0;
-            accumWrite = 1;
-            sampleIndex = 0;
+            camera.setProjection(fovY, static_cast<float>(width) / static_cast<float>(height), nearZ, farZ);
         }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-#pragma region operate panel
-        float elevDeg = glm::degrees(sunElevation);
-        float azimDeg = glm::degrees(sunAzimuth);
-        const ImVec2 display = ImGui::GetIO().DisplaySize;
-
-        ImGui::SetNextWindowPos(ImVec2(display.x - 8.f, 8.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
-        ImGui::SetNextWindowSize(ImVec2(260.f, 0.f), ImGuiCond_Always);
-        ImGui::Begin("Atmosphere", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
-
-        constexpr float labelW = 110.f;
-        auto slider = [&](const char* label, const char* id, float* v, float vmin, float vmax) {
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted(label);
-            ImGui::SameLine(labelW);
-            ImGui::SetNextItemWidth(-1.f);
-            return ImGui::SliderFloat(id, v, vmin, vmax);
-            };
-
-        const bool elevChanged = slider("Elevation", "##sun_elev", &elevDeg, -90.f, 90.f);
-        const bool azimChanged = slider("Azimuth", "##sun_azim", &azimDeg, -180.f, 180.f);
-        const bool irrChanged = slider("Irradiance", "##sun_irr", &sunIntensity, 0.f, 40.f);
-
-        ImGui::End();
-
-        if (elevChanged) {
-            sunElevation = glm::radians(elevDeg);
-        }
-        if (azimChanged) {
-            sunAzimuth = glm::radians(azimDeg);
-        }
-        if (elevChanged || azimChanged || irrChanged) {
-            sampleIndex = 0;
-        }
-#pragma endregion
-
 #pragma region memory usage
-        auto usage = sample_usage();
+        auto usage = host_usage();
         char text[128];
         std::snprintf(text, sizeof(text), "fps %.1f\ncpu %.0f%%\ngpu %.0f%%",
             ImGui::GetIO().Framerate, usage.cpu, usage.gpu);
@@ -190,26 +137,20 @@ int main() {
         draw_list->AddText(ImVec2(8.f, 8.f), IM_COL32(255, 255, 255, 255), text);
 #pragma endregion
 
-        glBindFramebuffer(GL_FRAMEBUFFER, accum[accumWrite].fbo);
         glViewport(0, 0, width, height);
-        glBindTextureUnit(0, accum[accumRead].tex);
-        uploadFrame();
-        drawFullscreen(weatherSysProgram);
 
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, width, height);
         glClearColor(0.f, 0.f, 0.f, 1.f);
         glClear(GL_COLOR_BUFFER_BIT);
-        glBindTextureUnit(0, accum[accumWrite].tex);
-        drawFullscreen(tonemapProgram);
+
+        uploadFrame();
+        drawFullscreen(weatherSysProgram);
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        glfwSwapBuffers(window);
+        t += 1u;
 
-        sampleIndex += 1u;
-        std::swap(accumRead, accumWrite);
+        glfwSwapBuffers(window);
     }
 
     glfwDestroyWindow(window);
