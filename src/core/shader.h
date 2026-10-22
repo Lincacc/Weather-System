@@ -45,7 +45,7 @@ static GLuint compileProgram(std::string_view vSource, std::string_view fSource)
     return program;
 }
 
-constexpr std::string_view kPostVS = R"(
+constexpr std::string_view vSource = R"(
     #version 460 core
     layout(location = 0) in vec3 position;
     layout(location = 0) out vec2 uv;
@@ -78,7 +78,8 @@ constexpr std::string_view fSource = R"(
     const float kMieG = 0.76;
     const int   kViewSteps = 64;
     const float kPi = 3.14159265358979323846;
-    const float kSunAngularRadius = 0.00935 / 2.0;
+    const float kSunAngularRadius = 0.01935 / 2.0;
+    const float kExposure = 1.0;
 
     float rayleighPhase(float mu) {
         return 3.0 / (16.0 * kPi) * (1.0 + mu * mu);
@@ -150,143 +151,14 @@ constexpr std::string_view fSource = R"(
         }
 
         vec3 radiance = sunIrradiance.rgb * inscattered;
-        if (dir.y > 0.0) {
-            float angle = acos(clamp(mu, -1.0, 1.0));
-            float w = fwidth(angle);
-            float coverage = (w > 0.0)
-                ? clamp((kSunAngularRadius - angle) / w + 0.5, 0.0, 1.0)
-                : float(angle <= kSunAngularRadius);
+        if (dir.y > 0.0 && mu >= cos(kSunAngularRadius)) {
             float tTop = (kAtmosphereTop - origin.y) / dir.y;
             vec3 T = transmittance(origin, origin + dir * tTop, dir);
             vec3 Lsun = sunIrradiance.rgb / (kPi * kSunAngularRadius * kSunAngularRadius);
-            radiance += Lsun * T * coverage;
+            radiance += Lsun * T;
         }
 
-        color = vec4(radiance, 1.0);
-    }
-)"sv;
-
-    constexpr std::string_view kExtractFS = R"(
-    #version 460 core
-
-    layout(location = 0) in vec2 uv;
-    layout(location = 0) out vec4 color;
-
-    layout(binding = 0) uniform sampler2D scene;
-
-    const float kThreshold = 5.0;
-    const vec3 kLum = vec3(0.2126, 0.7152, 0.0722);
-
-    // Karis 2014, 13-tap downsample, weights sum to 1.
-    vec3 downsample13(sampler2D src, vec2 uv) {
-        vec2 texel = 1.0 / vec2(textureSize(src, 0));
-        vec3 A = texture(src, uv + texel * vec2(-1.0, -1.0)).rgb;
-        vec3 B = texture(src, uv + texel * vec2( 0.0, -1.0)).rgb;
-        vec3 C = texture(src, uv + texel * vec2( 1.0, -1.0)).rgb;
-        vec3 D = texture(src, uv + texel * vec2(-0.5, -0.5)).rgb;
-        vec3 E = texture(src, uv + texel * vec2( 0.5, -0.5)).rgb;
-        vec3 F = texture(src, uv + texel * vec2(-1.0,  0.0)).rgb;
-        vec3 G = texture(src, uv).rgb;
-        vec3 H = texture(src, uv + texel * vec2( 1.0,  0.0)).rgb;
-        vec3 I = texture(src, uv + texel * vec2(-0.5,  0.5)).rgb;
-        vec3 J = texture(src, uv + texel * vec2( 0.5,  0.5)).rgb;
-        vec3 K = texture(src, uv + texel * vec2(-1.0,  1.0)).rgb;
-        vec3 L = texture(src, uv + texel * vec2( 0.0,  1.0)).rgb;
-        vec3 M = texture(src, uv + texel * vec2( 1.0,  1.0)).rgb;
-        return G * 0.125
-            + (A + C + K + M) * 0.03125
-            + (B + F + H + L) * 0.0625
-            + (D + E + I + J) * 0.125;
-    }
-
-    void main() {
-        vec3 c = downsample13(scene, uv);
-        float lum = dot(c, kLum);
-        vec3 bloom = vec3(0.0);
-        if (lum > kThreshold) {
-            bloom = c * ((lum - kThreshold) / lum);
-        }
-        color = vec4(bloom, 1.0);
-    }
-)";
-
-constexpr std::string_view kDownFS = R"(
-    #version 460 core
-
-    layout(location = 0) in vec2 uv;
-    layout(location = 0) out vec4 color;
-
-    layout(binding = 0) uniform sampler2D src;
-
-    vec3 downsample13(sampler2D src, vec2 uv) {
-        vec2 texel = 1.0 / vec2(textureSize(src, 0));
-        vec3 A = texture(src, uv + texel * vec2(-1.0, -1.0)).rgb;
-        vec3 B = texture(src, uv + texel * vec2( 0.0, -1.0)).rgb;
-        vec3 C = texture(src, uv + texel * vec2( 1.0, -1.0)).rgb;
-        vec3 D = texture(src, uv + texel * vec2(-0.5, -0.5)).rgb;
-        vec3 E = texture(src, uv + texel * vec2( 0.5, -0.5)).rgb;
-        vec3 F = texture(src, uv + texel * vec2(-1.0,  0.0)).rgb;
-        vec3 G = texture(src, uv).rgb;
-        vec3 H = texture(src, uv + texel * vec2( 1.0,  0.0)).rgb;
-        vec3 I = texture(src, uv + texel * vec2(-0.5,  0.5)).rgb;
-        vec3 J = texture(src, uv + texel * vec2( 0.5,  0.5)).rgb;
-        vec3 K = texture(src, uv + texel * vec2(-1.0,  1.0)).rgb;
-        vec3 L = texture(src, uv + texel * vec2( 0.0,  1.0)).rgb;
-        vec3 M = texture(src, uv + texel * vec2( 1.0,  1.0)).rgb;
-        return G * 0.125
-            + (A + C + K + M) * 0.03125
-            + (B + F + H + L) * 0.0625
-            + (D + E + I + J) * 0.125;
-    }
-
-    void main() {
-        color = vec4(downsample13(src, uv), 1.0);
-    }
-)";
-
-constexpr std::string_view kUpFS = R"(
-    #version 460 core
-
-    layout(location = 0) in vec2 uv;
-    layout(location = 0) out vec4 color;
-
-    layout(binding = 0) uniform sampler2D lowMip;
-    layout(binding = 1) uniform sampler2D carry;
-
-    vec3 gaussian5(sampler2D src, vec2 uv) {
-        vec2 texel = 1.0 / vec2(textureSize(src, 0));
-        vec3 acc = vec3(0.0);
-        float wsum = 0.0;
-        for (int y = -2; y <= 2; ++y) {
-            for (int x = -2; x <= 2; ++x) {
-                float w = exp(-0.5 * float(x * x + y * y));
-                acc += texture(src, uv + texel * vec2(float(x), float(y))).rgb * w;
-                wsum += w;
-            }
-        }
-        return acc / wsum;
-    }
-
-    void main() {
-        color = vec4(gaussian5(lowMip, uv) + texture(carry, uv).rgb, 1.0);
-    }
-)";
-
-constexpr std::string_view kCompositeFS = R"(
-    #version 460 core
-
-    layout(location = 0) in vec2 uv;
-    layout(location = 0) out vec4 color;
-
-    layout(binding = 0) uniform sampler2D scene;
-    layout(binding = 1) uniform sampler2D bloom;
-
-    const float kExposure = 1.0;
-    const float kBloomStrength = 0.06;
-
-    void main() {
-        vec3 hdr = texture(scene, uv).rgb + texture(bloom, uv).rgb * kBloomStrength;
-        vec3 ldr = vec3(1.0) - exp(-hdr * kExposure);
+        vec3 ldr = vec3(1.0) - exp(-radiance * kExposure);
         color = vec4(pow(ldr, vec3(1.0 / 2.2)), 1.0);
     }
-)";
+)"sv;

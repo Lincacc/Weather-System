@@ -1,17 +1,6 @@
 ﻿#include "core/core.h"
-
 FullscreenQuad quad;
-
-constexpr int kBloomMips = 3;
-ColorTarget sceneHdr;
-std::array<ColorTarget, kBloomMips> bloomDown{};
-std::array<ColorTarget, kBloomMips - 1> bloomUp{};
-
 GLuint weatherSysProgram = 0;
-GLuint extractProgram = 0;
-GLuint upSampleProgram = 0;
-GLuint downSampleProgram = 0;
-GLuint compositeProgram = 0;
 
 #include "core/camera.h"
 Camera camera;
@@ -62,57 +51,10 @@ static void uploadFrame() {
     glNamedBufferSubData(frameUbo, 0, sizeof(frame), &frame);
 }
 
-static void resizeHdr(int w, int h) {
-    sceneHdr.create(w, h);
-
-    int mw = w;
-    int mh = h;
-    for (int i = 0; i < kBloomMips; ++i) {
-        mw /= 2;
-        mh /= 2;
-        if (!(mw > 0 && mh > 0)) {
-            throw std::runtime_error("resizeHdr: bloom mip is 0");
-        }
-
-        bloomDown[i].create(mw, mh);
-        if (i < kBloomMips - 1) {
-            bloomUp[i].create(mw, mh);
-        }
-    }
-}
-
 static void drawFullscreen(GLuint program) {
     glUseProgram(program);
     glBindVertexArray(quad.vao);
     glDrawArrays(GL_TRIANGLES, 0, 6);
-}
-
-static void drawBloom() {
-    glBindFramebuffer(GL_FRAMEBUFFER, bloomDown[0].fbo);
-    glViewport(0, 0, bloomDown[0].w, bloomDown[0].h);
-    glBindTextureUnit(0, sceneHdr.tex);
-    drawFullscreen(extractProgram);
-
-    for (int i = 1; i < kBloomMips; ++i) {
-        glBindFramebuffer(GL_FRAMEBUFFER, bloomDown[i].fbo);
-        glViewport(0, 0, bloomDown[i].w, bloomDown[i].h);
-        glBindTextureUnit(0, bloomDown[i - 1].tex);
-        drawFullscreen(downSampleProgram);
-    }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, bloomUp[kBloomMips - 2].fbo);
-    glViewport(0, 0, bloomUp[kBloomMips - 2].w, bloomUp[kBloomMips - 2].h);
-    glBindTextureUnit(0, bloomDown[kBloomMips - 1].tex);
-    glBindTextureUnit(1, bloomDown[kBloomMips - 2].tex);
-    drawFullscreen(upSampleProgram);
-
-    for (int i = kBloomMips - 3; i >= 0; --i) {
-        glBindFramebuffer(GL_FRAMEBUFFER, bloomUp[i].fbo);
-        glViewport(0, 0, bloomUp[i].w, bloomUp[i].h);
-        glBindTextureUnit(0, bloomUp[i + 1].tex);
-        glBindTextureUnit(1, bloomDown[i].tex);
-        drawFullscreen(upSampleProgram);
-    }
 }
 
 #include <imgui.h>
@@ -136,15 +78,8 @@ int main() {
     ImGui_ImplOpenGL3_Init("#version 460");
 
     quad.create();
-    resizeHdr(width, height);
 
-#pragma region shader program
-    weatherSysProgram = compileProgram(kPostVS, fSource);
-    extractProgram = compileProgram(kPostVS, kExtractFS);
-    upSampleProgram = compileProgram(kPostVS, kUpFS);
-    downSampleProgram = compileProgram(kPostVS, kDownFS);
-    compositeProgram = compileProgram(kPostVS, kCompositeFS);
-#pragma endregion
+    weatherSysProgram = compileProgram(vSource, fSource);
 
     glCreateBuffers(1, &frameUbo);
     glNamedBufferStorage(frameUbo, sizeof(GPUFrame), nullptr, GL_DYNAMIC_STORAGE_BIT);
@@ -165,7 +100,6 @@ int main() {
                 lastHeight = height;
 
                 camera.setProjection(fovY, static_cast<float>(width) / static_cast<float>(height), nearZ, farZ);
-                resizeHdr(width, height);
             }
         }
 
@@ -211,8 +145,6 @@ int main() {
         draw_list->AddText(ImVec2(8.f, 8.f), IM_COL32(255, 255, 255, 255), text);
 #pragma endregion
 
-#pragma region draw weather system
-        glBindFramebuffer(GL_FRAMEBUFFER, sceneHdr.fbo);
         glViewport(0, 0, width, height);
 
         glClearColor(0.f, 0.f, 0.f, 1.f);
@@ -220,18 +152,6 @@ int main() {
 
         uploadFrame();
         drawFullscreen(weatherSysProgram);
-#pragma endregion
-
-#pragma region bloom
-        drawBloom();
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, width, height);
-
-        glBindTextureUnit(0, sceneHdr.tex);
-        glBindTextureUnit(1, bloomUp[0].tex);
-        drawFullscreen(compositeProgram);
-#pragma endregion
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
