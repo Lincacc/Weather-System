@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -102,5 +102,49 @@ struct FullscreenQuad {
         glEnableVertexArrayAttrib(vao, 0);
         glVertexArrayAttribFormat(vao, 0, 3, GL_FLOAT, GL_FALSE, 0);
         glVertexArrayAttribBinding(vao, 0, 0);
+    }
+};
+
+struct ColorTarget {
+    GLuint fbo = 0;
+    GLuint tex = 0;
+
+    int w = 0;
+    int h = 0;
+
+    void destroy() {
+        if (tex != 0) {
+            glDeleteTextures(1, &tex);
+            tex = 0;
+        }
+        if (fbo != 0) {
+            glDeleteFramebuffers(1, &fbo);
+            fbo = 0;
+        }
+    }
+
+    void create(int w, int h) {
+        if (!(w > 0 && h > 0)) {
+            throw std::runtime_error("ColorTarget::create: width and height must be > 0");
+        }
+
+        destroy();
+
+        glCreateTextures(GL_TEXTURE_2D, 1, &tex);
+
+        glTextureStorage2D(tex, 1, GL_RGBA32F, w, h);
+        glTextureParameteri(tex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTextureParameteri(tex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTextureParameteri(tex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(tex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glCreateFramebuffers(1, &fbo);
+        glNamedFramebufferTexture(fbo, GL_COLOR_ATTACHMENT0, tex, 0);
+        if (glCheckNamedFramebufferStatus(fbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            throw std::runtime_error("ColorTarget::create: framebuffer incomplete");
+        }
+
+        this->w = w;
+        this->h = h;
     }
 };

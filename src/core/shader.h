@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 
 #include <glad/glad.h>
 
@@ -48,17 +48,14 @@ static GLuint compileProgram(std::string_view vSource, std::string_view fSource)
 constexpr std::string_view vSource = R"(
     #version 460 core
     layout(location = 0) in vec3 position;
-    layout(location = 0) out vec2 uv;
     void main() {
         gl_Position = vec4(position, 1.0);
-        uv = vec2(position.xy * 0.5 + 0.5);
     }
 )";
 
 constexpr std::string_view fSource = R"(
     #version 460 core
 
-    layout(location = 0) in vec2 uv;
     layout(location = 0) out vec4 color;
 
     layout(std140, binding = 0) uniform Frame {
@@ -66,7 +63,10 @@ constexpr std::string_view fSource = R"(
         vec4 cameraPosition;
         vec4 sunDirection;
         vec4 sunIrradiance;
+        uvec4 sampleState;
     };
+
+    layout(binding = 0) uniform sampler2D history;
 
     // Bruneton 2008, converted to 1/m and m. Planar geometry, not the paper's spherical LUT.
     const vec3  kRayleighScattering = vec3(5.8e-6, 13.5e-6, 33.1e-6);
@@ -81,6 +81,33 @@ constexpr std::string_view fSource = R"(
     const float kSunAngularRadius = 0.01935 / 2.0;
     const float kExposure = 1.0;
 
+    // Joe & Kuo dimension 2: s = 1, a = 0, m1 = 1
+    // m_i = (2 * m_{i-1}) xor m_{i-1}, v_i = m_i << (32 - i)
+    const uint kSobolDir1[32] = uint[32](
+        0x80000000u, 0xc0000000u, 0xa0000000u, 0xf0000000u,
+        0x88000000u, 0xcc000000u, 0xaa000000u, 0xff000000u,
+        0x80800000u, 0xc0c00000u, 0xa0a00000u, 0xf0f00000u,
+        0x88880000u, 0xcccc0000u, 0xaaaa0000u, 0xffff0000u,
+        0x80008000u, 0xc000c000u, 0xa000a000u, 0xf000f000u,
+        0x88008800u, 0xcc00cc00u, 0xaa00aa00u, 0xff00ff00u,
+        0x80808080u, 0xc0c0c0c0u, 0xa0a0a0a0u, 0xf0f0f0f0u,
+        0x88888888u, 0xccccccccu, 0xaaaaaaaau, 0xffffffffu
+    );
+
+    float sobolUnit(uint fixedPoint) {
+        return ldexp(float(fixedPoint >> 8u), -24);
+    }
+
+    // Dimension 1 is bit reversal of the Gray code. Dimension 2 uses kSobolDir1.
+    vec2 sobol2D(uint index) {
+        uint gray = index ^ (index >> 1u);
+        uint y = 0u;
+        for (uint bit = 0u; bit < 32u; ++bit) {
+            y ^= kSobolDir1[bit] * ((gray >> bit) & 1u);
+        }
+        return vec2(sobolUnit(bitfieldReverse(gray)), sobolUnit(y));
+    }
+
     float rayleighPhase(float mu) {
         return 3.0 / (16.0 * kPi) * (1.0 + mu * mu);
     }
@@ -91,7 +118,7 @@ constexpr std::string_view fSource = R"(
             / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * mu, 1.5));
     }
 
-    // ¡Ò exp(-(y0 + t*dy)/H) dt between y0 and y1, dy != 0
+    // ï¿½ï¿½ exp(-(y0 + t*dy)/H) dt between y0 and y1, dy != 0
     float heightIntegral(float y0, float y1, float dy, float H) {
         return (H / dy) * (exp(-y0 / H) - exp(-y1 / H));
     }
@@ -128,7 +155,9 @@ constexpr std::string_view fSource = R"(
     }
 
     void main() {
-        vec2 ndc = uv * 2.0 - 1.0;
+        vec2 jitter = sobol2D(sampleState.x);
+        vec2 resolution = vec2(sampleState.yz);
+        vec2 ndc = ((gl_FragCoord.xy - vec2(0.5) + jitter) / resolution) * 2.0 - 1.0;
         vec4 worldFar = inverseViewProjection * vec4(ndc, 1.0, 1.0);
         vec3 origin = cameraPosition.xyz;
         vec3 dir = normalize(worldFar.xyz / worldFar.w - origin);
@@ -159,6 +188,24 @@ constexpr std::string_view fSource = R"(
         }
 
         vec3 ldr = vec3(1.0) - exp(-radiance * kExposure);
+        vec3 mean;
+        if (sampleState.x == 0u) {
+            mean = ldr;
+        } else {
+            vec3 historyMean = texelFetch(history, ivec2(gl_FragCoord.xy), 0).rgb;
+            float n = float(sampleState.x);
+            mean = (historyMean * n + ldr) / (n + 1.0);
+        }
+        color = vec4(mean, 1.0);
+    }
+)"sv;
+
+constexpr std::string_view tonemapSource = R"(
+    #version 460 core
+    layout(location = 0) out vec4 color;
+    layout(binding = 0) uniform sampler2D accum;
+    void main() {
+        vec3 ldr = texelFetch(accum, ivec2(gl_FragCoord.xy), 0).rgb;
         color = vec4(pow(ldr, vec3(1.0 / 2.2)), 1.0);
     }
 )"sv;
