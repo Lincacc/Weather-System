@@ -118,7 +118,7 @@ constexpr std::string_view fSource = R"(
             / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * mu, 1.5));
     }
 
-    // �� exp(-(y0 + t*dy)/H) dt between y0 and y1, dy != 0
+    // exp(-(y0 + t*dy)/H) dt between y0 and y1, dy != 0
     float heightIntegral(float y0, float y1, float dy, float H) {
         return (H / dy) * (exp(-y0 / H) - exp(-y1 / H));
     }
