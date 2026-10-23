@@ -9,7 +9,7 @@ GLuint weatherSysProgram = 0;
 
 #include "core/camera.h"
 float eyeHeight = 1.8f;
-float pitch = glm::radians(15.f);
+float pitch = glm::radians(45.0f);
 float fovY = glm::radians(60.f);
 float nearZ = 0.1f;
 float farZ = 50000.f;
@@ -20,9 +20,10 @@ struct GPUFrame {
     glm::mat4 inverseViewProjection;
     glm::vec4 camPosition;
     glm::vec4 sunDirection;
+    glm::vec4 sunIrradiance;
     glm::uvec4 status;
 };
-static_assert(sizeof(GPUFrame) == 64 + 16 + 16 + 16);
+static_assert(sizeof(GPUFrame) == 128);
 
 #include <GLFW/glfw3.h>
 int width = 1280;
@@ -31,6 +32,10 @@ int lastWidth = width;
 int lastHeight = height;
 
 GLuint frameUbo = 0;
+
+float sunElevation = glm::radians(45.f);
+float sunAzimuth = 0.f;
+float sunIntensity = 20.f;
 
 static void uploadFrame() {
     auto sunDirFromAngles = [](float elevation, float azimuth) {
@@ -41,12 +46,14 @@ static void uploadFrame() {
             ce * std::cos(azimuth),
         };
     };
-    const glm::vec3 sunDirection = sunDirFromAngles(glm::radians(45.f), .0f);
+    const glm::vec3 sunDirection = sunDirFromAngles(sunElevation, sunAzimuth);
+    const glm::vec3 sunIrradiance{ sunIntensity, sunIntensity, sunIntensity };
 
     const GPUFrame frame{
         camera.inverseViewProjection,
         glm::vec4{ camera.position, 1.f },
         glm::vec4{sunDirection, 0.f},
+        glm::vec4{sunIrradiance, 0.f},
         glm::uvec4{
             t,
             static_cast<std::uint32_t>(width),
@@ -126,6 +133,34 @@ int main() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+
+#pragma region operate panel
+        float elevDeg = glm::degrees(sunElevation);
+        float azimDeg = glm::degrees(sunAzimuth);
+        const ImVec2 display = ImGui::GetIO().DisplaySize;
+
+        ImGui::SetNextWindowPos(ImVec2(display.x - 8.f, 8.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
+        ImGui::SetNextWindowSize(ImVec2(260.f, 0.f), ImGuiCond_Always);
+        ImGui::Begin("Atmosphere", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize);
+
+        constexpr float labelW = 110.f;
+        auto slider = [&](const char* label, const char* id, float* v, float vmin, float vmax) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(label);
+            ImGui::SameLine(labelW);
+            ImGui::SetNextItemWidth(-1.f);
+            ImGui::SliderFloat(id, v, vmin, vmax);
+            };
+
+        slider("Elevation", "##sun_elev", &elevDeg, -90.f, 90.f);
+        slider("Azimuth", "##sun_azim", &azimDeg, -180.f, 180.f);
+        slider("Irradiance", "##sun_irr", &sunIntensity, 0.f, 40.f);
+
+        ImGui::End();
+
+        sunElevation = glm::radians(elevDeg);
+        sunAzimuth = glm::radians(azimDeg);
+#pragma endregion
 
 #pragma region memory usage
         auto usage = host_usage();

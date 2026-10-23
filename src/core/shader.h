@@ -29,8 +29,84 @@ constexpr std::string_view fSource = R"(
         mat4 inverseViewProjection;
         vec4 cameraPosition;
         vec4 sunDirection;
+        vec4 sunIrradiance;
         uvec4 status;
     };
+
+// Bruneton 2008, converted to 1/m and m. Planar geometry, not the paper's spherical LUT.
+const vec3  kRayleighScattering = vec3(5.8e-6, 13.5e-6, 33.1e-6);
+const float kMieScattering = 4.0e-6;
+const float kMieExtinction = kMieScattering / 0.9;
+const float kRayleighScaleHeight = 8000.0;
+const float kMieScaleHeight = 1200.0;
+const float kPlanetRadius = 6361e3;
+const float kAtmosphereRadius = 6369e3;
+const vec3  kPlanetCenter = vec3(0.0, -kPlanetRadius, 0.0);
+const float kMieG = 0.76;
+const int   kViewSteps = 64;
+const float kPi = 3.14159265358979323846;
+const float kExposure = 1.0;
+
+    float escape(vec3 p, vec3 d, float R) {
+        vec3 v = p - kPlanetCenter;
+        float b = dot(v, d);
+        float cdot = dot(v, v) - R * R;
+        float det2 = b * b - cdot;
+        if (det2 < 0.0) {
+            return -1.0;
+        }
+        float det = sqrt(det2);
+        float t1 = -b - det;
+        float t2 = -b + det;
+        return (t1 >= 0.0) ? t1 : t2;
+    }
+
+    float rayleighPhase(float mu) {
+        return 3.0 / (16.0 * kPi) * (1.0 + mu * mu);
+    }
+
+    float miePhase(float mu, float g) {
+        float g2 = g * g;
+        return 3.0 / (8.0 * kPi) * (1.0 - g2) * (1.0 + mu * mu)
+            / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * mu, 1.5));
+    }
+
+    // exp(-(y0 + t*dy)/H) dt between y0 and y1, dy != 0
+    float heightIntegral(float y0, float y1, float dy, float H) {
+        return (H / dy) * (exp(-y0 / H) - exp(-y1 / H));
+    }
+
+    // 沿球面累积光学厚度
+    vec3 scatterInscattered(vec3 origin, vec3 dir, float mu) {
+        float tEnd = escape(origin, dir, kAtmosphereRadius);
+        float pR = rayleighPhase(mu);
+        float pM = miePhase(mu, kMieG);
+        float dt = tEnd / float(kViewSteps);
+        vec3 inscattered = vec3(0.0);
+        vec3 tauR = vec3(0.0);
+        float tauM = 0.0;
+        for (int i = 0; i < kViewSteps; ++i) {
+            float t = (float(i) + 0.5) * dt;
+            vec3 p = origin + dir * t;
+            float h = length(p - kPlanetCenter) - kPlanetRadius;
+            float rhoR = exp(-h / kRayleighScaleHeight);
+            float rhoM = exp(-h / kMieScaleHeight);
+            tauR += kRayleighScattering * rhoR * dt;
+            tauM += kMieExtinction * rhoM * dt;
+            vec3 scatter = kRayleighScattering * rhoR * pR + vec3(kMieScattering) * rhoM * pM;
+            float tSun = escape(p, sunDirection.xyz, kAtmosphereRadius);
+            float dtSun = tSun / 4.0;
+            vec3 tauSun = vec3(0.0);
+            for (int j = 0; j < 4; ++j) {
+                vec3 ps = p + sunDirection.xyz * (float(j) * dtSun);
+                float hs = length(ps - kPlanetCenter) - kPlanetRadius;
+                tauSun += (kRayleighScattering * exp(-hs / kRayleighScaleHeight)
+                    + vec3(kMieExtinction) * exp(-hs / kMieScaleHeight)) * dtSun;
+            }
+            inscattered += exp(-(tauR + vec3(tauM))) * scatter * exp(-tauSun) * dt;
+        }
+        return inscattered;
+    }
 
 #define SEA_NUM_STEPS 7.
 #define SEA_ITER_FRAGMENT 5
@@ -40,8 +116,8 @@ constexpr std::string_view fSource = R"(
 #define SEA_FREQ 0.16
 #define SEA_BASE vec3(0.1,0.19,0.22)
 #define SEA_ITER_GEOMETRY 3
-#define SEA_TIME (1.0 + status.x * 0.005 * SEA_SPEED)
-#define SEA_EPSILON_NRM	(0.1 / status.x)
+#define SEA_TIME (1.0 + float(status.x) * 0.01 * SEA_SPEED)
+#define SEA_EPSILON_NRM	(0.1 / float(status.y))
 #define SEA_WATER_COLOR vec3(0.8,0.9,0.6)
 
     float hash( vec2 p ) {
@@ -142,27 +218,15 @@ constexpr std::string_view fSource = R"(
         return tmid;
     }
 
-    vec3 getSkyColor(vec3 e) {
-        e.y = (max(e.y,0.0)*0.8+0.2)*0.8;
-        return vec3(pow(1.0-e.y,2.0), 1.0-e.y, 0.6+(1.0-e.y)*0.4) * 1.1;
-    }
-
     vec3 getSeaColor(vec3 p, vec3 n, vec3 l, vec3 eye, vec3 dist, vec3 skyColor) {
-        float RAINBOW_WATER_SATURATION = 0.35;
-        float RAINBOW_WATER_LIGHTNESS = 0.1; //0.2
-        float RAINBOW_WATER_SPEED = 0.1;
         float fresnel = clamp(1.0 - dot(n,-eye), 0.0, 1.0);
         fresnel = pow(fresnel,3.0) * 0.5;
 
-        vec3 reflected = getSkyColor(reflect(eye,n));
-
-        vec3 weights = vec3(0.2125, 0.7154, 0.0721); 
-        float luminance = dot(reflected, weights);
-        reflected = mix(vec3(luminance), reflected, 0.1);
         float diff = pow(dot(n,l) * 0.4 + 0.6, 80.0);
         vec3 refracted = SEA_BASE + diff * SEA_WATER_COLOR * 0.12; 
-
+        
         vec3 color = mix(refracted,skyColor,fresnel) * skyColor;
+
         float atten = max(1.0 - dot(dist,dist) * 0.001, 0.0);
         color +=  clamp(SEA_WATER_COLOR * (p.y - SEA_HEIGHT) * 0.08 * atten,0.,1.);
 
@@ -180,13 +244,25 @@ constexpr std::string_view fSource = R"(
         vec3 ori = cameraPosition.xyz;
         vec3 dir = normalize(worldFar.xyz / worldFar.w - ori);
         vec3 sun_dir = normalize(sunDirection.xyz);
-        vec3 sky_color = getSkyColor(dir);
 
-        vec3 sea_p = ori + dir * traceSea(ori, dir);
-        vec3 sea_dist = sea_p - ori;
-        vec3 sea_n = sea_normal(sea_p, dot(sea_dist, sea_dist) * SEA_EPSILON_NRM);
-        vec3 sea_c = getSeaColor(sea_p,sea_n,sun_dir,dir,sea_dist,sky_color);
+        vec3 radiance;
+        if (dir.y > 0.0) {
+            radiance = sunIrradiance.rgb * scatterInscattered(ori, dir, dot(dir, sun_dir));
+        } else {
+            float L = -ori.y / dir.y;
+            vec3 atmo_p = ori + dir * L;
+            vec3 atmo_dir = dir;
+            atmo_dir.y = -atmo_dir.y;
+            vec3 sky_color = sunIrradiance.rgb * scatterInscattered(atmo_p, atmo_dir, dot(atmo_dir, sun_dir));
 
-        color = vec4(sea_c, 1.0);
+            vec3 sea_p = ori + dir * traceSea(ori, dir);
+            vec3 sea_dist = sea_p - ori;
+            vec3 sea_n = sea_normal(sea_p, dot(sea_dist, sea_dist) * SEA_EPSILON_NRM);
+            vec3 sea_color = getSeaColor(sea_p, sea_n, sun_dir, dir, sea_dist, sky_color);
+            radiance = mix(sky_color, sea_color, pow(smoothstep(0.0, -0.05, dir.y), 0.5));
+        }
+
+        vec3 ldr = vec3(1.0) - exp(-radiance * kExposure);
+        color = vec4(pow(ldr, vec3(1.0 / 2.2)), 1.0);
     }
 )"sv;
