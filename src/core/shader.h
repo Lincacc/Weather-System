@@ -19,6 +19,22 @@ constexpr std::string_view vSource = R"(
     }
 )";
 
+constexpr std::string_view noiseSource = R"(
+    #version 460 core
+    layout(local_size_x = 8, local_size_y = 8) in;
+    layout(binding = 0, r8) uniform writeonly image2D noiseImage;
+
+    float hash(vec2 p) {
+        float h = dot(p, vec2(127.1, 311.7));
+        return fract(sin(h) * 43758.5453123);
+    }
+
+    void main() {
+        ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+        imageStore(noiseImage, id, vec4(hash(vec2(id)), 0.0, 0.0, 1.0));
+    }
+)"sv;
+
 constexpr std::string_view fSource = R"(
     #version 460 core
 
@@ -33,9 +49,15 @@ constexpr std::string_view fSource = R"(
         uvec4 status;
     };
 
+    layout(binding = 0) uniform sampler2D iChannel0;
+
     float hash( vec2 p ) {
         float h = dot(p,vec2(127.1,311.7));	
         return fract(sin(h)*43758.5453123);
+    }
+
+    float noise(vec2 v) {
+        return textureLod(iChannel0, (v + 0.5) / 256.0, 0.0).r;
     }
 
     vec3 hash33(vec3 p) {
@@ -205,7 +227,12 @@ const float kNightMieGamma = 1.6;
             cv.y = -cv.y;
             return vec3(cv.xy, cv.z - 0.001);
         }
-        return normalize(cv + vec3(1.0, 0.0, 0.0));
+        float iTime = float(status.x) * 0.01;
+        float L1 = cameraPosition.y / cv.y;
+        vec3 O1 = cameraPosition.xyz + cv * L1;
+        return normalize(cv + vec3(1.0,
+            0.0009 * sin(iTime + 6.2831 * noise(O1.xz + vec2(0.0, iTime * 0.8))),
+            0.0));
     }
 
     vec3 composeSky(vec3 origin, vec3 dir, vec3 body, float refatt, bool reflected) {

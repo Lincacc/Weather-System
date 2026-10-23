@@ -96,6 +96,22 @@ int main() {
     quad.create();
     weatherSysProgram = compileProgram(vSource, fSource);
 
+    GLuint noiseTex = 0;
+    glCreateTextures(GL_TEXTURE_2D, 1, &noiseTex);
+    glTextureStorage2D(noiseTex, 1, GL_R8, 256, 256);
+    glTextureParameteri(noiseTex, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTextureParameteri(noiseTex, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTextureParameteri(noiseTex, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTextureParameteri(noiseTex, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    const GLuint noiseProgram = compileCompute(noiseSource);
+    glBindImageTexture(0, noiseTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
+    glUseProgram(noiseProgram);
+    glDispatchCompute(256 / 8, 256 / 8, 1);
+    glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+    glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
+    glBindTextureUnit(0, noiseTex);
+
     glfwGetFramebufferSize(window, &width, &height);
     if (width <= 0 || height <= 0) {
         throw std::runtime_error("framebuffer size must be > 0");

@@ -151,3 +151,22 @@ static GLuint compileProgram(std::string_view vSource, std::string_view fSource)
 
     return program;
 }
+
+static GLuint compileCompute(std::string_view source) {
+    const GLuint cs = compileShader(GL_COMPUTE_SHADER, source);
+    const GLuint program = glCreateProgram();
+
+    glAttachShader(program, cs);
+    glLinkProgram(program);
+
+    GLint ok = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &ok);
+    if (ok != GL_TRUE) {
+        throw std::runtime_error("program link failed");
+    }
+
+    glDetachShader(program, cs);
+    glDeleteShader(cs);
+
+    return program;
+}
