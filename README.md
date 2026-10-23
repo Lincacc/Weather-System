@@ -1,2 +1,4 @@
-# Hillaire 大气散射模型（天空向）
-球面大气 + 臭氧 + 透射 LUT + 各向同性多次散射 LUT
+# Nishita 式单次散射 + 高度场海水模拟
+<p>
+<img src="assets/output-1.png" alt="大气散射" width="100%">
+</p>

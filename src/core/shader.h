@@ -242,24 +242,24 @@ const float kPi = 3.14159265358979323846;
         vec3 dir = normalize(worldFar.xyz / worldFar.w - ori);
         vec3 sun_dir = normalize(sunDirection.xyz);
 
-    vec3 radiance;
-    if (dir.y > 0.0) {
-        vec3 sky_linear = sunIrradiance.rgb * scatterInscattered(ori, dir, dot(dir, sun_dir));
-        radiance = pow(sky_linear, vec3(1.0 / 2.2));
-    } else {
-        float L = -ori.y / dir.y;
-        vec3 atmo_p = ori + dir * L;
-        vec3 atmo_dir = dir;
-        atmo_dir.y = -atmo_dir.y;
-        vec3 sky_linear = sunIrradiance.rgb * scatterInscattered(atmo_p, atmo_dir, dot(atmo_dir, sun_dir));
-        vec3 sky_color = pow(sky_linear, vec3(1.0 / 2.2));
+        vec3 radiance;
+        if (dir.y > 0.0) {
+            vec3 sky_linear = sunIrradiance.rgb * scatterInscattered(ori, dir, dot(dir, sun_dir));
+            radiance = pow(sky_linear, vec3(1.0 / 2.2));
+        } else {
+            float L = -ori.y / dir.y;
+            vec3 atmo_p = ori + dir * L;
+            vec3 atmo_dir = dir;
+            atmo_dir.y = -atmo_dir.y;
+            vec3 sky_linear = sunIrradiance.rgb * scatterInscattered(atmo_p, atmo_dir, dot(atmo_dir, sun_dir));
+            vec3 sky_color = pow(sky_linear, vec3(1.0 / 2.2));
 
-        vec3 sea_p = ori + dir * traceSea(ori, dir);
-        vec3 sea_dist = sea_p - ori;
-        vec3 sea_n = sea_normal(sea_p, dot(sea_dist, sea_dist) * SEA_EPSILON_NRM);
-        vec3 sea_color = getSeaColor(sea_p, sea_n, sun_dir, dir, sea_dist, sky_color);
-        radiance = mix(sky_color, sea_color, pow(smoothstep(0.0, -0.05, dir.y), 0.5));
-    }
+            vec3 sea_p = ori + dir * traceSea(ori, dir);
+            vec3 sea_dist = sea_p - ori;
+            vec3 sea_n = sea_normal(sea_p, dot(sea_dist, sea_dist) * SEA_EPSILON_NRM);
+            vec3 sea_color = getSeaColor(sea_p, sea_n, sun_dir, dir, sea_dist, sky_color);
+            radiance = mix(sky_color, sea_color, pow(smoothstep(0.0, -0.05, dir.y), 0.5));
+        }
 
         color = vec4(radiance, 1.0);
     }
