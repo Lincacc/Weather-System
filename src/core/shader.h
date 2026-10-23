@@ -71,11 +71,6 @@ const float kExposure = 1.0;
             / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * mu, 1.5));
     }
 
-    // exp(-(y0 + t*dy)/H) dt between y0 and y1, dy != 0
-    float heightIntegral(float y0, float y1, float dy, float H) {
-        return (H / dy) * (exp(-y0 / H) - exp(-y1 / H));
-    }
-
     // 沿球面累积光学厚度
     vec3 scatterInscattered(vec3 origin, vec3 dir, float mu) {
         float tEnd = escape(origin, dir, kAtmosphereRadius);
@@ -93,7 +88,11 @@ const float kExposure = 1.0;
             float rhoM = exp(-h / kMieScaleHeight);
             tauR += kRayleighScattering * rhoR * dt;
             tauM += kMieExtinction * rhoM * dt;
-            vec3 scatter = kRayleighScattering * rhoR * pR + vec3(kMieScattering) * rhoM * pM;
+
+            float pS = miePhase(mu, 0.999);
+            vec3 scatter = kRayleighScattering * rhoR * pR
+                + vec3(kMieScattering) * rhoM * (pM + 10.0 * pS);
+                
             float tSun = escape(p, sunDirection.xyz, kAtmosphereRadius);
             float dtSun = tSun / 4.0;
             vec3 tauSun = vec3(0.0);
@@ -201,7 +200,6 @@ const float kExposure = 1.0;
         float hmin = sea_height_diff(ori + dir * tmin);
         
         float tmid = 0.0;
-
         for(int i = 0; i < int(SEA_NUM_STEPS); i++) {
             tmid = mix(tmin,tmax, hmin/(hmin-hmax));                   
             vec3 p = ori + dir * tmid;                   
