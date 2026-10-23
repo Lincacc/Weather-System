@@ -33,6 +33,17 @@ constexpr std::string_view fSource = R"(
         uvec4 status;
     };
 
+    float hash( vec2 p ) {
+        float h = dot(p,vec2(127.1,311.7));	
+        return fract(sin(h)*43758.5453123);
+    }
+
+    vec3 hash33(vec3 p) {
+        p = fract(p * vec3(443.8975, 397.2973, 491.1871));
+        p += dot(p.zxy, p.yxz + 19.27);
+        return fract(vec3(p.x * p.y, p.z * p.x, p.y * p.z));
+    }
+
 // Bruneton 2008, converted to 1/m and m. Planar geometry, not the paper's spherical LUT.
 const vec3  kRayleighScattering = vec3(5.8e-6, 13.5e-6, 33.1e-6);
 const float kMieScattering = 4.0e-6;
@@ -45,6 +56,14 @@ const vec3  kPlanetCenter = vec3(0.0, -kPlanetRadius, 0.0);
 const float kMieG = 0.76;
 const int   kViewSteps = 64;
 const float kPi = 3.14159265358979323846;
+
+const float kMieIntensity = 8.0;
+const float kMoonIntensity = 2.0;
+const float kNightMieScattering = 0.000021;
+const float kNightMieG = 0.1;
+const float kMoonDiscRadius = 0.05;
+const float kMoonDiscFade = 0.01;
+const float kNightMieGamma = 1.6;
 
     float escape(vec3 p, vec3 d, float R) {
         vec3 v = p - kPlanetCenter;
@@ -70,8 +89,21 @@ const float kPi = 3.14159265358979323846;
             / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * g * mu, 1.5));
     }
 
+    float miePhaseSoft(float mu, float g) {
+        float opmu2 = 1.0 + mu * mu;
+        return 3.0 / (8.0 * kPi) * (1.0 - g) * opmu2
+            / ((2.0 + g) * pow(1.0 + g - 2.0 * g * mu, 1.5));
+    }
+
+    vec3 drawMoonDisc(vec3 dir, vec3 body) {
+        float fov = tan(radians(60.0));
+        float mu = clamp(dot(dir, body), -1.0, 1.0);
+        float qlen = tan(acos(mu)) * fov;
+        return vec3(smoothstep(kMoonDiscRadius, kMoonDiscRadius - kMoonDiscFade, qlen));
+    }    
+
     // 沿球面累积光学厚度
-    vec3 scatterInscattered(vec3 origin, vec3 dir, float mu) {
+    vec3 scatterInscattered(vec3 origin, vec3 dir, float mu, out float depthM, out vec3 themie, out vec3 themoon) {
         float tEnd = escape(origin, dir, kAtmosphereRadius);
         float pR = rayleighPhase(mu);
         float pM = miePhase(mu, kMieG);
@@ -79,33 +111,128 @@ const float kPi = 3.14159265358979323846;
         vec3 inscattered = vec3(0.0);
         vec3 tauR = vec3(0.0);
         float tauM = 0.0;
+
+        themie = vec3(0.0);
+        themoon = vec3(0.0);
+
+        vec3 moonDir = normalize(sunDirection.xyz);
+        float camZ = abs(tan(radians(60.0)) * 0.5);
+        float fillElev = atan(0.08, camZ);
+        float phaseElev = atan(-0.01, camZ);
+        vec3 horiz = normalize(vec3(moonDir.x, 0.0, moonDir.z));
+        vec3 fillDir = normalize(horiz * cos(fillElev) + vec3(0.0, sin(fillElev), 0.0));
+        vec3 phaseDir = normalize(horiz * cos(phaseElev) + vec3(0.0, sin(phaseElev), 0.0));
+        vec3 M = vec3(0.0);
+        vec3 MM = vec3(0.0);
+
+        depthM = 0.0;
         for (int i = 0; i < kViewSteps; ++i) {
             float t = (float(i) + 0.5) * dt;
             vec3 p = origin + dir * t;
             float h = length(p - kPlanetCenter) - kPlanetRadius;
             float rhoR = exp(-h / kRayleighScaleHeight);
             float rhoM = exp(-h / kMieScaleHeight);
+            float mieExt = status.w == 1u ? kNightMieScattering : kMieExtinction;
             tauR += kRayleighScattering * rhoR * dt;
-            tauM += kMieExtinction * rhoM * dt;
+            tauM += mieExt * rhoM * dt;
+            depthM += rhoM * dt;
 
-            float pS = miePhase(mu, 0.999);
-            vec3 scatter = kRayleighScattering * rhoR * pR
-                + vec3(kMieScattering) * rhoM * (pM + 10.0 * pS);
-
-            float tSun = escape(p, sunDirection.xyz, kAtmosphereRadius);
-            float dtSun = tSun / 4.0;
-            vec3 tauSun = vec3(0.0);
-            for (int j = 0; j < 4; ++j) {
-                vec3 ps = p + sunDirection.xyz * (float(j) * dtSun);
-                float hs = length(ps - kPlanetCenter) - kPlanetRadius;
-                tauSun += (kRayleighScattering * exp(-hs / kRayleighScaleHeight)
-                    + vec3(kMieExtinction) * exp(-hs / kMieScaleHeight)) * dtSun;
+            if (status.w == 1u) {
+                vec3 Tview = exp(-(tauR + vec3(tauM)));
+                float tFill = escape(p, fillDir, kAtmosphereRadius);
+                float dtFill = tFill / 4.0;
+                vec3 tauFill = vec3(0.0);
+                float tMoon = escape(p, moonDir, kAtmosphereRadius);
+                float dtMoon = tMoon / 4.0;
+                vec3 tauMoon = vec3(0.0);
+                for (int j = 0; j < 4; ++j) {
+                    vec3 pf = p + fillDir * (float(j) * dtFill);
+                    float hf = length(pf - kPlanetCenter) - kPlanetRadius;
+                    tauFill += (kRayleighScattering * exp(-hf / kRayleighScaleHeight)
+                        + vec3(kNightMieScattering) * exp(-hf / kMieScaleHeight)) * dtFill;
+                    vec3 pm = p + moonDir * (float(j) * dtMoon);
+                    float hm = length(pm - kPlanetCenter) - kPlanetRadius;
+                    tauMoon += (vec3(13.5e-6) * exp(-hm / kRayleighScaleHeight)
+                        + vec3(kNightMieScattering) * exp(-hm / kMieScaleHeight)) * dtMoon;
+                }
+                M += Tview * exp(-tauFill) * rhoM * dt;
+                MM += Tview * exp(-tauMoon) * rhoM * dt;
+            } else {
+                vec3 scatter = kRayleighScattering * rhoR * pR
+                    + vec3(kMieScattering) * rhoM * (pM + 10.0 * miePhase(mu, 0.999));
+                float tSun = escape(p, sunDirection.xyz, kAtmosphereRadius);
+                float dtSun = tSun / 4.0;
+                vec3 tauSun = vec3(0.0);
+                for (int j = 0; j < 4; ++j) {
+                    vec3 ps = p + sunDirection.xyz * (float(j) * dtSun);
+                    float hs = length(ps - kPlanetCenter) - kPlanetRadius;
+                    tauSun += (kRayleighScattering * exp(-hs / kRayleighScaleHeight)
+                        + vec3(kMieExtinction) * exp(-hs / kMieScaleHeight)) * dtSun;
+                }
+                inscattered += exp(-(tauR + vec3(tauM))) * scatter * exp(-tauSun) * dt;
             }
-            inscattered += exp(-(tauR + vec3(tauM))) * scatter * exp(-tauSun) * dt;
+        }
+        if (status.w == 1u) {
+            float pNight = miePhase(dot(dir, phaseDir), kNightMieG);
+            float pMoon = miePhaseSoft(dot(dir, moonDir), 0.999);
+            themie = M * kNightMieScattering * pNight * kMieIntensity;
+            themoon = MM * kNightMieScattering * pMoon * kMoonIntensity;
+            return themie + themoon;
         }
         return inscattered;
     }
 
+    vec3 stars(vec3 p) {
+        vec3 c = vec3(0.0);
+        float res0 = 0.5;
+        float res1 = max(float(status.y), float(status.z)) * res0;
+        for (int i = 0; i < 4; ++i) {
+            vec3 q = fract(p * (0.15 * res1)) - 0.5;
+            vec3 id = floor(p * (0.15 * res1 * (1.0 / res0)));
+            vec2 rn = hash33(id).xy;
+            float c2 = 1.0 - smoothstep(0.0, 0.6, length(q));
+            c2 *= step(rn.x, 0.0005 + float(i) * float(i) * 0.001);
+            c += c2 * (mix(vec3(1.0, 0.49, 0.1), vec3(0.75, 0.9, 1.0), rn.y) * 0.1 + 0.9);
+            p *= 1.3;
+        }
+        return c * c * 0.8;
+    }
+
+    vec3 starSample(bool reflected) {
+        float AR = float(status.y) / float(status.z);
+        vec3 cv = normalize(vec3(ndc.x * AR, ndc.y + 0.5, -tan(radians(60.0))));
+        if (reflected) {
+            cv.y = -cv.y;
+            return vec3(cv.xy, cv.z - 0.001);
+        }
+        return normalize(cv + vec3(1.0, 0.0, 0.0));
+    }
+
+    vec3 composeSky(vec3 origin, vec3 dir, vec3 body, float refatt, bool reflected) {
+        float depthM;
+        vec3 themie;
+        vec3 themoon;
+        vec3 sky_linear = scatterInscattered(origin, dir, dot(dir, body), depthM, themie, themoon);
+        if (status.w == 1u) {
+            float scatfactor = ((abs(dir.y) / 0.5) * 0.00003) + 0.00001;
+            float scat = 1.0 - clamp(depthM * scatfactor, 0.0, 1.0);
+            float att_moon = reflected ? 0.2 : 1.0;
+            vec3 moon_disc = pow(drawMoonDisc(dir, body), vec3(2.2)) * att_moon;
+            themie *= refatt;
+            float nightLum = dot(themie, vec3(0.2125, 0.7154, 0.0721));
+            themie = vec3(nightLum);
+            sky_linear = vec3(0.0, 0.0, 0.01)
+                + pow(themie, vec3(kNightMieGamma))
+                + themoon * scat
+                + moon_disc * scat;
+            vec3 star = stars(starSample(reflected)) * 0.7 * refatt * scat;
+            sky_linear += pow(star, vec3(2.2));
+        } else {
+            sky_linear *= sunIrradiance.rgb;
+        }
+        return pow(sky_linear, vec3(1.0 / 2.2));
+    }
+ 
 #define SEA_NUM_STEPS 7.
 #define SEA_ITER_FRAGMENT 5
 #define SEA_HEIGHT 0.6
@@ -117,11 +244,6 @@ const float kPi = 3.14159265358979323846;
 #define SEA_TIME (1.0 + float(status.x) * 0.01 * SEA_SPEED)
 #define SEA_EPSILON_NRM	(0.1 / float(status.y))
 #define SEA_WATER_COLOR vec3(0.8,0.9,0.6)
-
-    float hash( vec2 p ) {
-        float h = dot(p,vec2(127.1,311.7));	
-        return fract(sin(h)*43758.5453123);
-    }
 
     float sea_noise( in vec2 p ) {
         vec2 i = floor( p );
@@ -215,7 +337,7 @@ const float kPi = 3.14159265358979323846;
         return tmid;
     }
 
-    vec3 getSeaColor(vec3 p, vec3 n, vec3 l, vec3 eye, vec3 dist, vec3 skyColor) {
+    vec3 getSeaColor(vec3 p, vec3 n, vec3 l, vec3 eye, vec3 dist, vec3 skyColor, vec3 moon_l) {
         float fresnel = clamp(1.0 - dot(n,-eye), 0.0, 1.0);
         fresnel = pow(fresnel,3.0) * 0.5;
 
@@ -227,11 +349,17 @@ const float kPi = 3.14159265358979323846;
         float atten = max(1.0 - dot(dist,dist) * 0.001, 0.0);
         color +=  clamp(SEA_WATER_COLOR * (p.y - SEA_HEIGHT) * 0.08 * atten,0.,1.);
 
-        float spec_fract = (40.0 + 8.0) / (3.1415 * 8.0);
-        float spec = pow(max(dot(reflect(eye,n),l),0.0), 40.0) * spec_fract;
-        color += clamp(vec3(spec)* skyColor * 0.5,0.,1.);
-
-        color = pow(color,vec3(0.65));
+        float specPow = status.w == 1u ? 10.0 : 40.0;
+        float spec_fract = (specPow + 8.0) / (3.1415 * 8.0);
+        float spec = pow(max(dot(reflect(eye,n),l),0.0), 40.0)
+            * ((40.0 + 8.0) / (3.1415 * 8.0));
+        color += clamp(vec3(spec) * skyColor * 0.5, 0.0, 1.0);
+        if (status.w == 1u) {
+            float ms = pow(max(dot(reflect(eye,n),moon_l),0.0), 10.0)
+                * ((10.0 + 8.0) / (3.1415 * 8.0));
+            color += vec3(ms) * skyColor;
+        }
+        color = pow(color, vec3(0.65));
 
         return color;
     }
@@ -244,20 +372,22 @@ const float kPi = 3.14159265358979323846;
 
         vec3 radiance;
         if (dir.y > 0.0) {
-            vec3 sky_linear = sunIrradiance.rgb * scatterInscattered(ori, dir, dot(dir, sun_dir));
-            radiance = pow(sky_linear, vec3(1.0 / 2.2));
+            radiance = composeSky(ori, dir, sun_dir, 1.0, false);
         } else {
             float L = -ori.y / dir.y;
             vec3 atmo_p = ori + dir * L;
             vec3 atmo_dir = dir;
             atmo_dir.y = -atmo_dir.y;
-            vec3 sky_linear = sunIrradiance.rgb * scatterInscattered(atmo_p, atmo_dir, dot(atmo_dir, sun_dir));
-            vec3 sky_color = pow(sky_linear, vec3(1.0 / 2.2));
 
             vec3 sea_p = ori + dir * traceSea(ori, dir);
             vec3 sea_dist = sea_p - ori;
             vec3 sea_n = sea_normal(sea_p, dot(sea_dist, sea_dist) * SEA_EPSILON_NRM);
-            vec3 sea_color = getSeaColor(sea_p, sea_n, sun_dir, dir, sea_dist, sky_color);
+            vec3 sky_color = composeSky(atmo_p, atmo_dir, sun_dir, 0.6, true);
+            vec3 sea_l = sun_dir;
+            if (status.w == 1u) {
+                sea_l = normalize(vec3(sun_dir.x, 0.08, sun_dir.z));
+            }
+            vec3 sea_color = getSeaColor(sea_p, sea_n, sea_l, dir, sea_dist, sky_color, sun_dir);
             radiance = mix(sky_color, sea_color, pow(smoothstep(0.0, -0.05, dir.y), 0.5));
         }
 

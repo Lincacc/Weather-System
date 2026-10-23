@@ -45,8 +45,10 @@ static void uploadFrame() {
             std::sin(elevation),
             ce * std::cos(azimuth),
         };
-    };
-    const glm::vec3 sunDirection = sunDirFromAngles(sunElevation, sunAzimuth);
+    }; 
+    const bool sunGone = sunElevation < glm::radians(0.);
+    const float bodyElevation = sunGone ? -sunElevation : sunElevation;
+    const glm::vec3 sunDirection = sunDirFromAngles(bodyElevation, sunAzimuth);
     const glm::vec3 sunIrradiance{ sunIntensity, sunIntensity, sunIntensity };
 
     const GPUFrame frame{
@@ -58,7 +60,7 @@ static void uploadFrame() {
             t,
             static_cast<std::uint32_t>(width),
             static_cast<std::uint32_t>(height),
-            0
+            sunGone ? 1u : 0u
         }
     };
 
