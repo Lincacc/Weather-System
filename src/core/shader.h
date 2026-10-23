@@ -45,7 +45,6 @@ const vec3  kPlanetCenter = vec3(0.0, -kPlanetRadius, 0.0);
 const float kMieG = 0.76;
 const int   kViewSteps = 64;
 const float kPi = 3.14159265358979323846;
-const float kExposure = 1.0;
 
     float escape(vec3 p, vec3 d, float R) {
         vec3 v = p - kPlanetCenter;
@@ -92,7 +91,7 @@ const float kExposure = 1.0;
             float pS = miePhase(mu, 0.999);
             vec3 scatter = kRayleighScattering * rhoR * pR
                 + vec3(kMieScattering) * rhoM * (pM + 10.0 * pS);
-                
+
             float tSun = escape(p, sunDirection.xyz, kAtmosphereRadius);
             float dtSun = tSun / 4.0;
             vec3 tauSun = vec3(0.0);
@@ -228,8 +227,8 @@ const float kExposure = 1.0;
         float atten = max(1.0 - dot(dist,dist) * 0.001, 0.0);
         color +=  clamp(SEA_WATER_COLOR * (p.y - SEA_HEIGHT) * 0.08 * atten,0.,1.);
 
-        float spec_fract = (60.0 + 8.0) / (3.1415 * 8.0);
-        float spec = pow(max(dot(reflect(eye,n),l),0.0),60.0) * spec_fract;
+        float spec_fract = (40.0 + 8.0) / (3.1415 * 8.0);
+        float spec = pow(max(dot(reflect(eye,n),l),0.0), 40.0) * spec_fract;
         color += clamp(vec3(spec)* skyColor * 0.5,0.,1.);
 
         color = pow(color,vec3(0.65));
@@ -243,24 +242,25 @@ const float kExposure = 1.0;
         vec3 dir = normalize(worldFar.xyz / worldFar.w - ori);
         vec3 sun_dir = normalize(sunDirection.xyz);
 
-        vec3 radiance;
-        if (dir.y > 0.0) {
-            radiance = sunIrradiance.rgb * scatterInscattered(ori, dir, dot(dir, sun_dir));
-        } else {
-            float L = -ori.y / dir.y;
-            vec3 atmo_p = ori + dir * L;
-            vec3 atmo_dir = dir;
-            atmo_dir.y = -atmo_dir.y;
-            vec3 sky_color = sunIrradiance.rgb * scatterInscattered(atmo_p, atmo_dir, dot(atmo_dir, sun_dir));
+    vec3 radiance;
+    if (dir.y > 0.0) {
+        vec3 sky_linear = sunIrradiance.rgb * scatterInscattered(ori, dir, dot(dir, sun_dir));
+        radiance = pow(sky_linear, vec3(1.0 / 2.2));
+    } else {
+        float L = -ori.y / dir.y;
+        vec3 atmo_p = ori + dir * L;
+        vec3 atmo_dir = dir;
+        atmo_dir.y = -atmo_dir.y;
+        vec3 sky_linear = sunIrradiance.rgb * scatterInscattered(atmo_p, atmo_dir, dot(atmo_dir, sun_dir));
+        vec3 sky_color = pow(sky_linear, vec3(1.0 / 2.2));
 
-            vec3 sea_p = ori + dir * traceSea(ori, dir);
-            vec3 sea_dist = sea_p - ori;
-            vec3 sea_n = sea_normal(sea_p, dot(sea_dist, sea_dist) * SEA_EPSILON_NRM);
-            vec3 sea_color = getSeaColor(sea_p, sea_n, sun_dir, dir, sea_dist, sky_color);
-            radiance = mix(sky_color, sea_color, pow(smoothstep(0.0, -0.05, dir.y), 0.5));
-        }
+        vec3 sea_p = ori + dir * traceSea(ori, dir);
+        vec3 sea_dist = sea_p - ori;
+        vec3 sea_n = sea_normal(sea_p, dot(sea_dist, sea_dist) * SEA_EPSILON_NRM);
+        vec3 sea_color = getSeaColor(sea_p, sea_n, sun_dir, dir, sea_dist, sky_color);
+        radiance = mix(sky_color, sea_color, pow(smoothstep(0.0, -0.05, dir.y), 0.5));
+    }
 
-        vec3 ldr = vec3(1.0) - exp(-radiance * kExposure);
-        color = vec4(pow(ldr, vec3(1.0 / 2.2)), 1.0);
+        color = vec4(radiance, 1.0);
     }
 )"sv;
