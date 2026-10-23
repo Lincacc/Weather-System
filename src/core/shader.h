@@ -117,18 +117,30 @@ const float kNightMieGamma = 1.6;
             / ((2.0 + g) * pow(1.0 + g - 2.0 * g * mu, 1.5));
     }
 
-    vec3 drawMoonDisc(vec3 dir, vec3 body) {
-        float fov = tan(radians(60.0));
-        float mu = clamp(dot(dir, body), -1.0, 1.0);
-        float qlen = tan(acos(mu)) * fov;
-        return vec3(smoothstep(kMoonDiscRadius, kMoonDiscRadius - kMoonDiscFade, qlen));
-    }    
+    // clip.w = -view.z。q 与 DrawCircle 相同：ndc.x 乘宽高比后的平面距离。
+    float discPlaneRadius(vec3 centerDir, out float inFront) {
+        vec4 clip = inverse(inverseViewProjection) * vec4(cameraPosition.xyz + centerDir, 1.0);
+        if (!(clip.w > 0.0)) {
+            inFront = 0.0;
+            return 0.0;
+        }
+        inFront = 1.0;
+        float ar = float(status.y) / float(status.z);
+        vec2 qPixel = vec2(ndc.x * ar, ndc.y);
+        vec2 qCenter = vec2((clip.x / clip.w) * ar, clip.y / clip.w);
+        return length(qPixel - qCenter);
+    }
+
+    vec3 drawMoonDisc(float qlen, float inFront) {
+        return vec3(smoothstep(kMoonDiscRadius, kMoonDiscRadius - kMoonDiscFade, qlen) * inFront);
+    }
 
     // 沿球面累积光学厚度
-    vec3 scatterInscattered(vec3 origin, vec3 dir, float mu, out float depthM, out vec3 themie, out vec3 themoon) {
+    vec3 scatterInscattered(vec3 origin, vec3 dir, float mu, float muDisc, float discFront, out float depthM, out vec3 themie, out vec3 themoon) {
         float tEnd = escape(origin, dir, kAtmosphereRadius);
         float pR = rayleighPhase(mu);
         float pM = miePhase(mu, kMieG);
+        float pSharp = miePhase(muDisc, 0.999) * discFront;
         float dt = tEnd / float(kViewSteps);
         vec3 inscattered = vec3(0.0);
         vec3 tauR = vec3(0.0);
@@ -181,7 +193,7 @@ const float kNightMieGamma = 1.6;
                 MM += Tview * exp(-tauMoon) * rhoM * dt;
             } else {
                 vec3 scatter = kRayleighScattering * rhoR * pR
-                    + vec3(kMieScattering) * rhoM * (pM + 10.0 * miePhase(mu, 0.999));
+                    + vec3(kMieScattering) * rhoM * (pM + 10.0 * pSharp);
                 float tSun = escape(p, sunDirection.xyz, kAtmosphereRadius);
                 float dtSun = tSun / 4.0;
                 vec3 tauSun = vec3(0.0);
@@ -236,15 +248,19 @@ const float kNightMieGamma = 1.6;
     }
 
     vec3 composeSky(vec3 origin, vec3 dir, vec3 body, float refatt, bool reflected) {
+        vec3 center = reflected ? vec3(body.x, -body.y, body.z) : body;
+        float inFront;
+        float qlen = discPlaneRadius(center, inFront);
+        float muDisc = cos(atan(qlen / tan(radians(60.0))));
         float depthM;
         vec3 themie;
         vec3 themoon;
-        vec3 sky_linear = scatterInscattered(origin, dir, dot(dir, body), depthM, themie, themoon);
+        vec3 sky_linear = scatterInscattered(origin, dir, dot(dir, body), muDisc, inFront, depthM, themie, themoon);
         if (status.w == 1u) {
             float scatfactor = ((abs(dir.y) / 0.5) * 0.00003) + 0.00001;
             float scat = 1.0 - clamp(depthM * scatfactor, 0.0, 1.0);
             float att_moon = reflected ? 0.2 : 1.0;
-            vec3 moon_disc = pow(drawMoonDisc(dir, body), vec3(2.2)) * att_moon;
+            vec3 moon_disc = pow(drawMoonDisc(qlen, inFront), vec3(2.2)) * att_moon;
             themie *= refatt;
             float nightLum = dot(themie, vec3(0.2125, 0.7154, 0.0721));
             themie = vec3(nightLum);
