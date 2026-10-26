@@ -43,3 +43,6 @@ set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT W
 source_group(TREE ${CMAKE_SOURCE_DIR} FILES ${SOURCES} ${HEADERS})
 
 target_link_libraries(WeatherSystem PRIVATE glfw glm::glm imgui glad legacy_stdio_definitions pdh)
+
+# Set the working directory for the debugger to the source directory (CMAKE_SOURCE_DIR = E:\repo\Weather System)
+set_target_properties(WeatherSystem PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")

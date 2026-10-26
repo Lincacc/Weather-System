@@ -1,8 +1,10 @@
 ﻿#include "core/core.h"
+#include "io/io.h"
 
 #include <cstdint>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 FullscreenQuad quad;
 GLuint weatherSysProgram = 0;
@@ -111,6 +113,11 @@ int main() {
     glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
     glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R8);
     glBindTextureUnit(0, noiseTex);
+
+    const GLuint weatherMap = makeRgTexture("resource/weather.png", 384, 384, GL_REPEAT);
+    const GLuint cloudTypeMap = makeRgTexture("resource/cloud_type.png", 40, 319, GL_CLAMP_TO_EDGE);
+    const GLuint noiseL = makeVolumeTexture("resource/noise_l.png", 128);
+    const GLuint noiseH = makeVolumeTexture("resource/noise_h.png", 32);
 
     glfwGetFramebufferSize(window, &width, &height);
     if (width <= 0 || height <= 0) {
